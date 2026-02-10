@@ -17,6 +17,6 @@ spectogram = librosa.amplitude_to_db(np.abs(stft))
 librosa.display.specshow(spectogram, sr = sr, x_axis='time', y_axis ='log')
 
 plt.colorbar()
-plt.title("Spectogram(db)")
+plt.title("Spectrogram(db)")
 plt.tight_layout()
 plt.show()
