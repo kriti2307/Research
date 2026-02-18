@@ -4,7 +4,7 @@ import librosa.display
 import matplotlib.pyplot as plt
 
 #loading the sound
-y, sr = librosa.load("Eminem - Stan (Long Version) ft. Dido.mp3",sr=None)
+y, sr = librosa.load("Bird.ogg",sr=None)
 
 
 stft = librosa.stft(y)

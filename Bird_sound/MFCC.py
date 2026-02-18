@@ -4,7 +4,7 @@ import librosa.display
 import matplotlib.pyplot as plt
 
 #Load
-y , sr = librosa.load("Eminem - Stan (Long Version) ft. Dido.mp3")
+y , sr = librosa.load("Bird.ogg")
 
 mfccs = librosa.feature.mfcc(y = y, sr = sr, n_mfcc = 13, n_fft = 2048, hop_length = 512)
 
