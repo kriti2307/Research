@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bird call detector</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,300..800&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="page">
+    <header class="masthead">
+      <h1>Bird call detector</h1>
+      <p class="lead">Upload a field recording. The model listens in 5-second windows and marks where it hears each species.</p>
+    </header>
+
+    <main>
+      <form id="form" class="intake" novalidate>
+        <label class="drop" id="drop" for="file">
+          <span class="drop-title">Drop a recording here</span>
+          <span class="drop-sub">or choose a file. Accepts WAV, MP3, OGG, FLAC and M4A, up to 25 MB and 2 minutes.</span>
+          <input type="file" id="file" accept="audio/*,.ogg,.oga,.opus,.flac,.m4a,.aac,.mp3,.wav,.webm">
+        </label>
+        <div class="picked" id="picked" hidden>
+          <span class="picked-name" id="picked-name"></span>
+          <button type="submit" class="primary" id="go">Analyze recording</button>
+        </div>
+        <p class="error" id="error" role="alert" hidden></p>
+      </form>
+
+      <section class="result" id="result" hidden aria-live="polite">
+        <p class="demo-banner" id="demo-banner" hidden>Demo mode. These detections are scripted test values, not output from the trained model.</p>
+
+        <h2 id="file-heading" class="file-heading"></h2>
+        <audio id="player" controls preload="metadata"></audio>
+
+        <div class="controls">
+          <label for="threshold">Confidence threshold</label>
+          <input type="range" id="threshold" min="0.3" max="0.95" step="0.05" value="0.6">
+          <output id="threshold-out" for="threshold">60%</output>
+        </div>
+
+        <div class="stack" id="stack" aria-label="Waveform, spectrogram and detections on a shared time axis">
+          <div class="track">
+            <div class="label">Waveform</div>
+            <canvas id="wave" class="wave"></canvas>
+          </div>
+          <div class="track">
+            <div class="label">Spectrogram</div>
+            <img id="spec" class="spec" alt="Spectrogram of the recording">
+          </div>
+          <div id="lanes"></div>
+          <div class="track">
+            <div class="label"></div>
+            <div class="ruler" id="ruler"></div>
+          </div>
+          <div class="playhead" id="playhead" hidden></div>
+        </div>
+
+        <h2>Heard in this recording</h2>
+        <div id="summary"></div>
+
+        <details class="windows">
+          <summary>Prediction for every window</summary>
+          <table id="windows-table"></table>
+        </details>
+
+        <p class="limits" id="limits"></p>
+      </section>
+    </main>
+  </div>
+
+  <script src="segments.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

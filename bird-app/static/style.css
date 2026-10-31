@@ -1,0 +1,164 @@
+/*
+  Design notes
+  - Cool grey page, ink text. The only saturated colours are the spectrogram's
+    own magma and the species colours, so the data is what you look at.
+  - One type family (Bricolage Grotesque), headings set narrow and heavy.
+  - One memorable thing: waveform, spectrogram and detections share a single
+    time axis, so a detection sits directly under the sound that caused it.
+*/
+:root {
+  --fog: #e6ecee;
+  --paper: #f5f8f9;
+  --ink: #12212a;
+  --slate: #566872;
+  --rule: #c3cfd5;
+  --accent: #0e6f78;
+  --error: #a4262c;
+  --gutter: 132px;
+  --sp0: #0f7b83; --sp1: #c47f0a; --sp2: #6b4fb0; --sp3: #c0415b;
+  --sp4: #3f7d2c; --sp5: #2c63b8; --sp6: #a35a1f; --sp7: #6f7a86;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fog);
+  color: var(--ink);
+  font-family: "Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.page { max-width: 1080px; margin: 0 auto; padding: 40px 20px 72px; }
+
+h1 {
+  margin: 0 0 12px;
+  font-size: clamp(2.2rem, 1.2rem + 4vw, 3.8rem);
+  line-height: 1;
+  font-weight: 750;
+  font-stretch: 78%;
+  letter-spacing: -0.02em;
+}
+h2 { margin: 36px 0 12px; font-size: 1.3rem; font-weight: 650; font-stretch: 85%; }
+.lead { margin: 0 0 32px; max-width: 54ch; color: var(--slate); font-size: 1.1rem; }
+
+/* ---- intake ---- */
+.drop {
+  position: relative;
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-height: 220px;
+  padding: 28px 28px 44px;
+  background-color: var(--paper);
+  background-image: linear-gradient(to bottom, transparent 27px, rgba(18, 33, 42, 0.07) 27px);
+  background-size: 100% 28px;
+  border: 1.5px dashed var(--rule);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.drop::after { /* time ticks along the bottom, like an empty spectrogram */
+  content: "";
+  position: absolute;
+  left: 12px; right: 12px; bottom: 12px; height: 9px;
+  background-image: repeating-linear-gradient(to right, var(--rule) 0 1px, transparent 1px 48px);
+}
+.drop:hover, .drop.over { border-color: var(--accent); }
+.drop:focus-within { outline: 3px solid var(--accent); outline-offset: 3px; }
+.drop input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.drop-title { font-size: 1.5rem; font-weight: 650; font-stretch: 85%; }
+.drop-sub { color: var(--slate); max-width: 52ch; }
+
+.picked { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; margin-top: 16px; }
+.picked-name { font-weight: 550; overflow-wrap: anywhere; }
+button.primary {
+  font: inherit; font-weight: 600;
+  padding: 10px 20px;
+  color: var(--paper); background: var(--ink);
+  border: 0; border-radius: 6px; cursor: pointer;
+}
+button.primary:hover { background: #20384a; }
+button.primary:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+button.primary:disabled { opacity: 0.6; cursor: progress; }
+
+.error { margin: 14px 0 0; color: var(--error); font-weight: 550; }
+
+/* ---- results ---- */
+.demo-banner {
+  margin: 0 0 20px; padding: 10px 14px;
+  background: #fff3cf; border-left: 4px solid #c47f0a; font-weight: 550;
+}
+.file-heading { margin: 8px 0 10px; overflow-wrap: anywhere; }
+#player { width: 100%; margin-bottom: 16px; }
+
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 20px; }
+.controls input[type="range"] { width: min(280px, 100%); accent-color: var(--accent); }
+.controls output { min-width: 3ch; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.stack {
+  --p: 0;
+  position: relative;
+  padding: 14px 14px 8px 0;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  cursor: crosshair;
+}
+.track { display: grid; grid-template-columns: var(--gutter) 1fr; align-items: center; margin-bottom: 8px; }
+.label {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px 0 14px;
+  font-size: 0.85rem; line-height: 1.2; color: var(--slate);
+}
+.dot { flex: none; width: 10px; height: 10px; border-radius: 50%; }
+.wave { display: block; width: 100%; height: 72px; }
+.spec { display: block; width: 100%; height: 150px; background: #000; }
+
+.lane { position: relative; height: 22px; background: rgba(18, 33, 42, 0.05); border-radius: 3px; }
+.band { position: absolute; top: 2px; bottom: 2px; min-width: 3px; border-radius: 3px; }
+.band.unsure { background: repeating-linear-gradient(135deg, #9aa8b0 0 4px, #c3cfd5 4px 8px); opacity: 0.8; }
+
+.ruler { position: relative; height: 24px; border-top: 1px solid var(--rule); }
+.tick { position: absolute; top: 0; height: 7px; border-left: 1px solid var(--slate); }
+.tick span {
+  position: absolute; top: 9px; left: 0; transform: translateX(-50%);
+  font-size: 0.72rem; color: var(--slate); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+.playhead {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  left: calc(var(--gutter) + (100% - var(--gutter) - 14px) * var(--p));
+  background: var(--ink); pointer-events: none;
+}
+
+/* one reveal when results first appear */
+@keyframes reveal { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+.stack.reveal .band { animation: reveal 0.7s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .stack.reveal .band { animation: none; } }
+
+/* ---- summary and table ---- */
+.summary-row { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); }
+.summary-row .dot { transform: translateY(1px); }
+.summary-row strong { font-weight: 650; }
+.summary-row span.detail { color: var(--slate); }
+.none { color: var(--slate); max-width: 60ch; }
+
+.windows { margin-top: 24px; }
+.windows summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.windows summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+table { width: 100%; max-width: 640px; margin-top: 8px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 600; color: var(--slate); font-size: 0.85rem; padding: 6px 12px 6px 0; }
+td { padding: 6px 12px 6px 0; border-top: 1px solid var(--rule); }
+tr.dim td { color: var(--slate); }
+.bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--ink); vertical-align: middle; margin-right: 8px; }
+tr.dim .bar { background: #9aa8b0; }
+
+.limits { margin: 28px 0 0; max-width: 68ch; color: var(--slate); font-size: 0.92rem; }
+
+@media (max-width: 640px) {
+  :root { --gutter: 92px; }
+  .page { padding: 28px 14px 56px; }
+  .label { padding-left: 10px; }
+}
