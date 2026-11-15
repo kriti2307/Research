@@ -9,7 +9,7 @@ model = tf.keras.models.load_model("bird_model.h5")
 class_names = ['Barfly', 'asbfly', 'ashpri', 'bkcbul']
 
 # load image
-img_path = "XC134896 (1)_chunk0.png"   
+img_path = r"data_split/train/asbfly/XC134896 (1)_chunk1.png"
 
 img = image.load_img(img_path, target_size=(128,128))
 img_array = image.img_to_array(img)
