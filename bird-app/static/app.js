@@ -124,8 +124,8 @@
     buildRuler();
     el.result.hidden = false;
     drawWaveform();
+    buildTable();          // must exist before updateDetections() dims its rows
     updateDetections();
-    buildTable();
     buildLimits();
 
     el.stack.classList.add('reveal');
@@ -175,7 +175,7 @@
     var b = node('div', 'band' + (className ? ' ' + className : ''));
     b.style.left = (start / dur * 100) + '%';
     b.style.width = ((end - start) / dur * 100) + '%';
-    if (species) b.style.background = colorVar(species);
+    if (species) { b.style.background = colorVar(species); b.style.color = colorVar(species); }
     b.title = tip;
     lane.appendChild(b);
   }
@@ -214,13 +214,21 @@
       return;
     }
     rows.forEach(function (r) {
-      var row = node('div', 'summary-row');
-      row.appendChild(dot(r.species));
-      row.appendChild(node('strong', null, label(r.species)));
-      row.appendChild(node('span', 'detail',
+      var card = node('div', 'species-card');
+      var name = node('div', 'name');
+      name.appendChild(dot(r.species));
+      name.appendChild(document.createTextNode(label(r.species)));
+      card.appendChild(name);
+      card.appendChild(node('span', 'detail',
         r.seconds.toFixed(1) + ' s in ' + r.segments + (r.segments === 1 ? ' segment' : ' segments') +
         ', peak confidence ' + pct(r.peak_confidence)));
-      el.summary.appendChild(row);
+      var meter = node('div', 'meter');
+      var fill = node('span');
+      fill.style.width = Math.round(r.peak_confidence * 100) + '%';
+      fill.style.background = colorVar(r.species);
+      meter.appendChild(fill);
+      card.appendChild(meter);
+      el.summary.appendChild(card);
     });
   }
 
@@ -273,7 +281,7 @@
     var ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--slate') || '#566872';
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--wave') || '#8fd0d6';
     var barW = Math.max(1, w / peaks.length);
     for (var i = 0; i < peaks.length; i++) {
       var y1 = (1 - peaks[i][1]) * h / 2;
