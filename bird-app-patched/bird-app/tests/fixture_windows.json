@@ -1,0 +1,25 @@
+{
+  "comment": "Hand-worked example shared by the Python and JavaScript tests. Threshold 0.6.",
+  "threshold": 0.6,
+  "windows": [
+    {"start": 0.0,  "end": 5.0,  "species": "A", "confidence": 0.90},
+    {"start": 2.5,  "end": 7.5,  "species": "A", "confidence": 0.80},
+    {"start": 5.0,  "end": 10.0, "species": "B", "confidence": 0.70},
+    {"start": 7.5,  "end": 12.5, "species": "B", "confidence": 0.50},
+    {"start": 10.0, "end": 15.0, "species": "B", "confidence": 0.65},
+    {"start": 12.5, "end": 17.5, "species": "A", "confidence": 0.95},
+    {"start": 15.0, "end": 20.0, "species": "A", "confidence": 0.40},
+    {"start": 16.1, "end": 21.1, "species": "A", "confidence": 0.85}
+  ],
+  "segments": [
+    {"species": "A", "start": 0.0,  "end": 7.5,  "mean_confidence": 0.85, "peak_confidence": 0.9},
+    {"species": "B", "start": 5.0,  "end": 10.0, "mean_confidence": 0.7,  "peak_confidence": 0.7},
+    {"species": "B", "start": 10.0, "end": 15.0, "mean_confidence": 0.65, "peak_confidence": 0.65},
+    {"species": "A", "start": 12.5, "end": 17.5, "mean_confidence": 0.95, "peak_confidence": 0.95},
+    {"species": "A", "start": 16.1, "end": 21.1, "mean_confidence": 0.85, "peak_confidence": 0.85}
+  ],
+  "summary": [
+    {"species": "A", "segments": 3, "seconds": 16.1, "peak_confidence": 0.95},
+    {"species": "B", "segments": 2, "seconds": 10.0, "peak_confidence": 0.7}
+  ]
+}
