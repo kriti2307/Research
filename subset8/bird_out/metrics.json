@@ -1,0 +1,57 @@
+{
+  "threshold": 0.5,
+  "per_class": {
+    "asbfly": {
+      "precision": 0.938,
+      "recall": 0.38,
+      "f1": 0.541,
+      "support": 79
+    },
+    "ashpri1": {
+      "precision": 0.959,
+      "recall": 0.644,
+      "f1": 0.77,
+      "support": 73
+    },
+    "barfly1": {
+      "precision": 0.847,
+      "recall": 0.685,
+      "f1": 0.758,
+      "support": 89
+    },
+    "barswa": {
+      "precision": 0.562,
+      "recall": 0.608,
+      "f1": 0.584,
+      "support": 74
+    },
+    "bcnher": {
+      "precision": 1.0,
+      "recall": 0.236,
+      "f1": 0.382,
+      "support": 110
+    },
+    "bkcbul1": {
+      "precision": 0.827,
+      "recall": 0.597,
+      "f1": 0.694,
+      "support": 72
+    },
+    "bkwsti": {
+      "precision": 0.987,
+      "recall": 0.771,
+      "f1": 0.865,
+      "support": 96
+    },
+    "brnhao1": {
+      "precision": 0.943,
+      "recall": 0.795,
+      "f1": 0.863,
+      "support": 83
+    }
+  },
+  "none_correct": 0.885,
+  "mix_all_species_found": 0.223,
+  "single_exact_match": 0.565,
+  "mean_average_precision": 0.832
+}
