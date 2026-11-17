@@ -1,5 +1,10 @@
+"""Audio analysis and bird species prediction for the web app.
 
-"""Audio analysis and bird species prediction for the web app."""
+The model is the multi-label one trained by subset8/train_multilabel.py: one SIGMOID output
+per species, so every species is judged on its own. A window can contain one species,
+several species, or none. Nothing is ever forced: a species is reported only when its own
+probability reaches the threshold.
+"""
 
 from __future__ import annotations
 
@@ -12,13 +17,16 @@ from typing import Protocol
 
 import numpy as np
 from matplotlib.figure import Figure
-from PIL import Image
+
+import birdfeatures as bf
 
 
-SAMPLE_RATE = 22050
-WINDOW_SEC = 5.0
-MODEL_IMG_SIZE = (128, 128)
+SAMPLE_RATE = bf.SR
+WINDOW_SEC = bf.WINDOW_SEC
 MAX_SECONDS = 120
+
+# 0.5 is the threshold subset8/bird_out/metrics.json was measured at.
+DEFAULT_THRESHOLD = 0.5
 
 
 class AudioError(Exception):
@@ -31,6 +39,10 @@ class AudioError(Exception):
 
 class AudioBackend(Protocol):
     def load(self, path: str, max_seconds: float):
+        ...
+
+    def features(self, chunk: np.ndarray):
+        """5 s waveform -> the model's input array, shape birdfeatures.INPUT_SHAPE."""
         ...
 
     def mel_db(self, y: np.ndarray, sr: int):
@@ -62,6 +74,12 @@ class LibrosaBackend:
 
         return y, sr
 
+    def features(self, chunk):
+        # Same function the model was trained with (subset8/birdfeatures.py).
+        return bf.chunk_to_features(chunk)
+
+    # The two methods below only draw the spectrogram shown on the page.
+    # The model does not see this image.
     def mel_db(self, y, sr):
         import librosa
 
@@ -93,8 +111,6 @@ class KerasPredictor:
     def __init__(self, model_path: str, classes: list[str]):
         import tensorflow as tf
 
-        self._tf = tf
-
         self.model = tf.keras.models.load_model(
             model_path,
             compile=False
@@ -108,19 +124,29 @@ class KerasPredictor:
                 f"classes.json contains {len(classes)} classes."
             )
 
-    def predict(self, images: list[np.ndarray]) -> np.ndarray:
+        if tuple(self.model.input_shape[1:]) != tuple(bf.INPUT_SHAPE):
+            raise ValueError(
+                f"Model expects input {tuple(self.model.input_shape[1:])} but "
+                f"birdfeatures.py produces {tuple(bf.INPUT_SHAPE)}. "
+                "Use a model trained with this birdfeatures.py."
+            )
 
-        batch = np.stack([
-            self._tf.image.resize(
-                im.astype("float32"),
-                MODEL_IMG_SIZE,
-                method="bilinear"
-            ).numpy()
-            for im in images
-        ])
+        # A softmax model would force exactly one species per window.
+        activation = getattr(self.model.layers[-1], "activation", None)
+
+        if getattr(activation, "__name__", "") != "sigmoid":
+            raise ValueError(
+                "The model's last layer must use a sigmoid activation (multi-label). "
+                "This looks like a softmax model, which can only pick one species."
+            )
+
+    def predict(self, features: list[np.ndarray]) -> np.ndarray:
+
+        batch = np.stack(features).astype("float32")
 
         return self.model.predict(
-            batch / 255.0,
+            batch,
+            batch_size=32,
             verbose=0
         )
 
@@ -151,40 +177,8 @@ def make_windows(
 
 
 # --------------------------------------------------
-# SPECTROGRAM GENERATION
+# SPECTROGRAM GENERATION (display only)
 # --------------------------------------------------
-
-def render_model_image(
-    backend: AudioBackend,
-    chunk: np.ndarray,
-    sr: int
-):
-
-    fig = Figure(figsize=(3, 3))
-    ax = fig.add_subplot(111)
-
-    backend.draw(
-        ax,
-        backend.mel_db(chunk, sr),
-        sr
-    )
-
-    ax.axis("off")
-
-    buf = io.BytesIO()
-
-    fig.savefig(
-        buf,
-        format="png",
-        bbox_inches="tight",
-        pad_inches=0
-    )
-
-    buf.seek(0)
-
-    with Image.open(buf) as im:
-        return np.asarray(im.convert("RGB"))
-
 
 def render_display_spectrogram(
     backend: AudioBackend,
@@ -263,6 +257,10 @@ def merge_segments(
     windows: list[dict],
     threshold: float
 ):
+    """Merge consecutive windows of one species into segments.
+
+    windows: [{"species", "start", "end", "confidence"}, ...] in time order.
+    """
 
     segments = []
     current = None
@@ -315,6 +313,65 @@ def merge_segments(
         }
         for s in segments
     ]
+
+
+def window_detections(
+    window: dict,
+    classes: list[str],
+    threshold: float
+):
+    """Species whose own probability reaches the threshold in one window, strongest first.
+
+    An empty list means "no species detected". There is deliberately no fallback to the
+    highest-scoring species. Mirrored by detectionsAt() in static/segments.js.
+    """
+
+    found = [
+        {"species": c, "confidence": window["probs"][c]}
+        for c in classes
+        if window["probs"][c] >= threshold
+    ]
+
+    found.sort(key=lambda d: -d["confidence"])
+
+    return found
+
+
+def segments_from_probs(
+    windows: list[dict],
+    classes: list[str],
+    threshold: float
+):
+    """Per-species segments from windows that carry a probability for every species.
+
+    Each species is merged on its own, so segments of different species can overlap in
+    time (two birds calling together). Mirrored by segmentsFromProbs() in static/segments.js,
+    which lets the page re-draw instantly when the threshold slider moves.
+    """
+
+    segments = []
+
+    for c in classes:
+
+        per_species = [
+            {
+                "species": c,
+                "start": w["start"],
+                "end": w["end"],
+                "confidence": w["probs"][c]
+            }
+            for w in windows
+        ]
+
+        segments.extend(
+            merge_segments(per_species, threshold)
+        )
+
+    segments.sort(
+        key=lambda s: (s["start"], s["species"])
+    )
+
+    return segments
 
 
 # --------------------------------------------------
@@ -420,7 +477,7 @@ class Analyzer:
         self,
         path: str,
         hop_sec: float = 2.5,
-        threshold: float = 0.25,
+        threshold: float = DEFAULT_THRESHOLD,
         max_seconds: float = MAX_SECONDS
     ) -> dict:
 
@@ -452,34 +509,22 @@ class Analyzer:
             hop_sec
         )
 
-        win = int(round(WINDOW_SEC * sr))
+        # Scale the WHOLE recording once, exactly like training did, so a quiet
+        # stretch stays quiet instead of being stretched up to look like a call.
+        y_model = bf.normalize_recording(y)
 
-        images = []
-
-        for s, e in spans:
-
-            chunk = y[s:e]
-
-            if len(chunk) < win:
-
-                chunk = np.pad(
-                    chunk,
-                    (0, win - len(chunk))
-                )
-
-            images.append(
-                render_model_image(
-                    self.backend,
-                    chunk,
-                    sr
-                )
+        features = [
+            self.backend.features(
+                bf.fix_length(y_model[s:e])
             )
+            for s, e in spans
+        ]
 
         # Run model
         with self._lock:
 
             probs = np.asarray(
-                self.predictor.predict(images)
+                self.predictor.predict(features)
             )
 
         if probs.ndim != 2 or probs.shape[1] != len(self.classes):
@@ -487,60 +532,12 @@ class Analyzer:
                 "Model prediction shape does not match the class list."
             )
 
-        # Multiple candidate predictions per window
+        # One probability per species per window. Each species is judged independently.
         windows = []
-
-        per_species_windows = {
-            c: [] for c in self.classes
-        }
 
         for (s, e), p in zip(spans, probs):
 
-            detected = [
-                i
-                for i, score in enumerate(p)
-                if float(score) >= threshold
-            ]
-
-            # Always retain the strongest prediction
-            if not detected:
-
-                detected = [
-                    int(np.argmax(p))
-                ]
-
-            detections = []
-
-            for k in detected:
-
-                confidence = float(p[k])
-                species = self.classes[k]
-
-                detections.append({
-                    "species": species,
-                    "confidence": round(
-                        confidence,
-                        4
-                    )
-                })
-
-                per_species_windows[species].append({
-
-                    "start": round(s / sr, 2),
-
-                    "end": round(
-                        min(e, n) / sr,
-                        2
-                    ),
-
-                    "species": species,
-
-                    "confidence": confidence
-                })
-
-            best = int(np.argmax(p))
-
-            windows.append({
+            window = {
 
                 "start": round(s / sr, 2),
 
@@ -549,15 +546,6 @@ class Analyzer:
                     2
                 ),
 
-                "species": self.classes[best],
-
-                "confidence": round(
-                    float(p[best]),
-                    4
-                ),
-
-                "detections": detections,
-
                 "probs": {
                     c: round(float(v), 4)
                     for c, v in zip(
@@ -565,22 +553,21 @@ class Analyzer:
                         p
                     )
                 }
-            })
+            }
 
-        # Create separate segments for each species
-        segments = []
-
-        for species_windows in per_species_windows.values():
-
-            segments.extend(
-                merge_segments(
-                    species_windows,
-                    threshold
-                )
+            # May hold several species, or none.
+            window["detections"] = window_detections(
+                window,
+                self.classes,
+                threshold
             )
 
-        segments.sort(
-            key=lambda x: x["start"]
+            windows.append(window)
+
+        segments = segments_from_probs(
+            windows,
+            self.classes,
+            threshold
         )
 
         # Final response

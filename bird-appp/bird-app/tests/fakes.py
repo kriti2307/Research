@@ -10,6 +10,7 @@ import numpy as np
 from scipy import signal
 from scipy.io import wavfile
 
+import birdfeatures as bf
 from inference import SAMPLE_RATE, AudioError
 
 
@@ -31,6 +32,10 @@ class FakeBackend:
             raise AudioError(f"This recording is longer than {int(max_seconds)} seconds. Trim it and try again.")
         return y, SAMPLE_RATE
 
+    def features(self, chunk):
+        # Not the real features. Only the right shape, so the web layer can be exercised.
+        return np.zeros(bf.INPUT_SHAPE, dtype=np.float32)
+
     def mel_db(self, y, sr):
         _, _, sxx = signal.spectrogram(y, fs=sr, nperseg=2048, noverlap=1536)
         mel = np.stack([g.mean(axis=0) for g in np.array_split(sxx, 128, axis=0)])
@@ -42,21 +47,30 @@ class FakeBackend:
 
 
 class StubPredictor:
-    """Returns scripted predictions: plan is a list of (class_index, confidence)
-    that is cycled through, one entry per window."""
+    """Returns scripted MULTI-LABEL predictions (independent sigmoid-style scores).
+
+    plan is a list with one entry per window, cycled through. Each entry is a list of
+    (class_index, probability) pairs; every other species gets a low background score.
+    An empty entry means "no bird in this window", and an entry with two pairs means two
+    birds at once. Scores do NOT sum to 1, exactly like a sigmoid model.
+    """
 
     is_stub = True
 
     def __init__(self, n_classes: int, plan=None):
         self.n_classes = n_classes
-        self.plan = plan or [(0, 0.9), (0, 0.8), (1, 0.7), (2, 0.4)]
+        self.plan = plan or [
+            [(0, 0.9)],                # one bird
+            [(0, 0.8), (1, 0.7)],      # two birds at the same time
+            [(1, 0.75)],               # one bird
+            [],                        # no bird at all
+        ]
 
-    def predict(self, images):
-        out = np.zeros((len(images), self.n_classes), dtype=np.float32)
-        for i in range(len(images)):
-            k, conf = self.plan[i % len(self.plan)]
-            out[i, :] = (1.0 - conf) / (self.n_classes - 1)
-            out[i, k] = conf
+    def predict(self, features):
+        out = np.full((len(features), self.n_classes), 0.02, dtype=np.float32)
+        for i in range(len(features)):
+            for k, p in self.plan[i % len(self.plan)]:
+                out[i, k] = p
         return out
 
 

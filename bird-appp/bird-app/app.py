@@ -11,7 +11,7 @@ import tempfile
 from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from inference import MAX_SECONDS, AudioError
+from inference import DEFAULT_THRESHOLD, MAX_SECONDS, AudioError
 
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".ogg", ".oga", ".opus", ".flac", ".m4a", ".aac", ".webm"}
 MAX_UPLOAD_MB = 25
@@ -63,7 +63,7 @@ def create_app(analyzer=None) -> Flask:
 
         try:
             hop = float(request.form.get("hop", 2.5))
-            threshold = float(request.form.get("threshold", 0.6))
+            threshold = float(request.form.get("threshold", DEFAULT_THRESHOLD))
         except ValueError:
             return _error("hop and threshold must be numbers.", 400)
         if not 1.0 <= hop <= 5.0:

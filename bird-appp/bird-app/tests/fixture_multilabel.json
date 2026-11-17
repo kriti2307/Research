@@ -1,0 +1,29 @@
+{
+  "comment": "Hand-worked multi-label example shared by the Python and JavaScript tests. Threshold 0.5. Each window has one independent probability per species (they do not sum to 1). Window 1 has TWO species above threshold, window 4 has NONE.",
+  "threshold": 0.5,
+  "classes": ["A", "B", "C"],
+  "windows": [
+    {"start": 0.0,  "end": 5.0,  "probs": {"A": 0.90, "B": 0.10, "C": 0.05}},
+    {"start": 2.5,  "end": 7.5,  "probs": {"A": 0.80, "B": 0.70, "C": 0.10}},
+    {"start": 5.0,  "end": 10.0, "probs": {"A": 0.20, "B": 0.75, "C": 0.10}},
+    {"start": 7.5,  "end": 12.5, "probs": {"A": 0.10, "B": 0.30, "C": 0.55}},
+    {"start": 10.0, "end": 15.0, "probs": {"A": 0.10, "B": 0.10, "C": 0.10}}
+  ],
+  "detections": [
+    [{"species": "A", "confidence": 0.9}],
+    [{"species": "A", "confidence": 0.8}, {"species": "B", "confidence": 0.7}],
+    [{"species": "B", "confidence": 0.75}],
+    [{"species": "C", "confidence": 0.55}],
+    []
+  ],
+  "segments": [
+    {"species": "A", "start": 0.0, "end": 7.5,  "mean_confidence": 0.85,  "peak_confidence": 0.9},
+    {"species": "B", "start": 2.5, "end": 10.0, "mean_confidence": 0.725, "peak_confidence": 0.75},
+    {"species": "C", "start": 7.5, "end": 12.5, "mean_confidence": 0.55,  "peak_confidence": 0.55}
+  ],
+  "summary": [
+    {"species": "A", "segments": 1, "seconds": 7.5, "peak_confidence": 0.9},
+    {"species": "B", "segments": 1, "seconds": 7.5, "peak_confidence": 0.75},
+    {"species": "C", "segments": 1, "seconds": 5.0, "peak_confidence": 0.55}
+  ]
+}

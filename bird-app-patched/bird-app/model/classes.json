@@ -1,4 +1,13 @@
 {
-  "classes": ["Barfly", "asbfly", "ashpri", "bkcbul"],
+  "classes": [
+    "asbfly",
+    "ashpri1",
+    "barfly1",
+    "barswa",
+    "bcnher",
+    "bkcbul1",
+    "bkwsti",
+    "brnhao1"
+  ],
   "display_names": {}
 }

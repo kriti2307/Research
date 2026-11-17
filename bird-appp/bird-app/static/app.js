@@ -18,7 +18,7 @@
     table: $('windows-table'), limits: $('limits')
   };
 
-  var state = { file: null, data: null, threshold: 0.6, audioUrl: null, raf: null };
+  var state = { file: null, data: null, threshold: 0.5, audioUrl: null, raf: null };
 
   // ---------- helpers ----------
   function fmtTime(s) {
@@ -124,7 +124,6 @@
     buildRuler();
     el.result.hidden = false;
     drawWaveform();
-    buildTable();          // must exist before updateDetections() dims its rows
     updateDetections();
     buildLimits();
 
@@ -137,15 +136,12 @@
 
   function buildLanes() {
     el.lanes.textContent = '';
-    state.data.classes.concat(['__unsure']).forEach(function (sp) {
+    // One lane per species. Lanes are independent, so two species can be lit at the same time.
+    state.data.classes.forEach(function (sp) {
       var row = node('div', 'track');
       var lab = node('div', 'label');
-      if (sp === '__unsure') {
-        lab.textContent = 'Below threshold';
-      } else {
-        lab.appendChild(dot(sp));
-        lab.appendChild(document.createTextNode(label(sp)));
-      }
+      lab.appendChild(dot(sp));
+      lab.appendChild(document.createTextNode(label(sp)));
       var lane = node('div', 'lane');
       lane.dataset.species = sp;
       row.appendChild(lab);
@@ -183,7 +179,7 @@
   function updateDetections() {
     var d = state.data;
     var threshold = state.threshold;
-    var segs = BirdSegments.mergeSegments(d.windows, threshold);
+    var segs = BirdSegments.segmentsFromProbs(d.windows, d.classes, threshold);
 
     var lanes = {};
     el.lanes.querySelectorAll('.lane').forEach(function (l) {
@@ -195,22 +191,16 @@
       placeBand(lanes[s.species], s.start, s.end, '',
         label(s.species) + ', ' + fmtRange(s.start, s.end) + ', peak ' + pct(s.peak_confidence), s.species);
     });
-    d.windows.forEach(function (w) {
-      if (w.confidence < threshold) {
-        placeBand(lanes.__unsure, w.start, w.end, 'unsure',
-          fmtRange(w.start, w.end) + ': best guess ' + label(w.species) + ' at only ' + pct(w.confidence));
-      }
-    });
 
     renderSummary(BirdSegments.summarize(segs));
-    renderTableDim();
+    renderTable();
   }
 
   function renderSummary(rows) {
     el.summary.textContent = '';
     if (!rows.length) {
       el.summary.appendChild(node('p', 'none',
-        'No species reached ' + pct(state.threshold) + ' confidence. Lower the threshold to see the model’s best guesses.'));
+        'No bird detected. No species reached ' + pct(state.threshold) + ' confidence in this recording.'));
       return;
     }
     rows.forEach(function (r) {
@@ -232,42 +222,49 @@
     });
   }
 
-  function buildTable() {
+  // One row per window listing EVERY species at or above the threshold (several, or none).
+  // Rebuilt when the slider moves because the list itself depends on the threshold.
+  function renderTable() {
+    var d = state.data;
     var t = el.table;
     t.textContent = '';
     var head = node('tr');
-    ['Time', 'Best guess', 'Confidence'].forEach(function (h) { head.appendChild(node('th', null, h)); });
+    ['Time', 'Species heard', 'Confidence'].forEach(function (h) { head.appendChild(node('th', null, h)); });
     t.appendChild(head);
-    state.data.windows.forEach(function (w) {
-      var tr = node('tr');
+    d.windows.forEach(function (w) {
+      var found = BirdSegments.detectionsAt(w, d.classes, state.threshold);
+      var tr = node('tr', found.length ? '' : 'dim');
       tr.appendChild(node('td', null, fmtRange(w.start, w.end)));
       var sp = node('td');
-      sp.appendChild(dot(w.species));
-      sp.appendChild(document.createTextNode(' ' + label(w.species)));
+      var conf = node('td');
+      if (!found.length) {
+        sp.appendChild(document.createTextNode('No bird detected'));
+      }
+      found.forEach(function (f, i) {
+        var line = node('div', 'multi');
+        line.appendChild(dot(f.species));
+        line.appendChild(document.createTextNode(' ' + label(f.species)));
+        sp.appendChild(line);
+        var cl = node('div', 'multi');
+        var bar = node('span', 'bar');
+        bar.style.width = Math.round(f.confidence * 80) + 'px';
+        cl.appendChild(bar);
+        cl.appendChild(document.createTextNode(pct(f.confidence)));
+        conf.appendChild(cl);
+      });
       tr.appendChild(sp);
-      var c = node('td');
-      var bar = node('span', 'bar');
-      bar.style.width = Math.round(w.confidence * 80) + 'px';
-      c.appendChild(bar);
-      c.appendChild(document.createTextNode(pct(w.confidence)));
-      tr.appendChild(c);
+      tr.appendChild(conf);
       t.appendChild(tr);
-    });
-  }
-
-  function renderTableDim() {
-    var rows = el.table.querySelectorAll('tr');
-    state.data.windows.forEach(function (w, i) {
-      rows[i + 1].className = w.confidence < state.threshold ? 'dim' : '';
     });
   }
 
   function buildLimits() {
     var names = state.data.classes.map(label).join(', ');
     el.limits.textContent =
-      'The model knows ' + state.data.classes.length + ' species (' + names + '). It has no “no bird” class, ' +
-      'so every window gets one of them as its best guess. Windows under the threshold are marked as uncertain. ' +
-      'If two species call at the same time, each window still gets a single best guess.';
+      'The model knows ' + state.data.classes.length + ' species (' + names + '). Each species is scored on its own, ' +
+      'so a window can show several species at once, or none. A species appears only when its own score reaches the ' +
+      'threshold. Calls of species the model was not trained on are not recognised, and may occasionally be mistaken ' +
+      'for one of these.';
   }
 
   function drawWaveform() {

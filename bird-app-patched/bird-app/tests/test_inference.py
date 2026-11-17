@@ -1,78 +1,294 @@
-import json
+
 import os
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
-from inference import (SAMPLE_RATE, make_windows, merge_segments, render_model_image,
-                       summarize, waveform_peaks)
-from tests.fakes import FakeBackend
+from inference import (
+    SAMPLE_RATE,
+    Analyzer,
+    AudioError,
+    make_windows,
+    merge_segments,
+    summarize,
+    waveform_peaks
+)
+from tests.fakes import FakeBackend, make_wav_bytes
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+
+class FakePredictor:
+    is_stub = True
+
+    def predict(self, features):
+        outputs = np.zeros((len(features), 8), dtype=np.float32)
+
+        # Two species detected in the same window
+        outputs[:, 0] = 0.85
+        outputs[:, 1] = 0.72
+
+        return outputs
+
+
+CLASSES = [
+    "asbfly",
+    "ashpri1",
+    "barfly1",
+    "barswa",
+    "bcnher",
+    "bkcbul1",
+    "bkwsti",
+    "brnhao1"
+]
 
 
 class WindowTests(unittest.TestCase):
+
     def test_short_clip_gives_one_padded_window(self):
-        spans = make_windows(3 * SAMPLE_RATE, SAMPLE_RATE, 5.0, 2.5)
+        spans = make_windows(
+            3 * SAMPLE_RATE,
+            SAMPLE_RATE,
+            5.0,
+            2.5
+        )
         self.assertEqual(spans, [(0, 5 * SAMPLE_RATE)])
 
     def test_exact_window_length(self):
-        spans = make_windows(5 * SAMPLE_RATE, SAMPLE_RATE, 5.0, 2.5)
+        spans = make_windows(
+            5 * SAMPLE_RATE,
+            SAMPLE_RATE,
+            5.0,
+            2.5
+        )
         self.assertEqual(len(spans), 1)
 
-    def test_tail_is_covered_by_an_end_anchored_window(self):
+    def test_tail_is_covered(self):
         n = 12 * SAMPLE_RATE
-        spans = make_windows(n, SAMPLE_RATE, 5.0, 2.5)
+
+        spans = make_windows(
+            n,
+            SAMPLE_RATE,
+            5.0,
+            2.5
+        )
+
         self.assertEqual(spans[0][0], 0)
         self.assertEqual(spans[-1][1], n)
         self.assertEqual(len(spans), 4)
 
     def test_non_overlapping_hop(self):
-        spans = make_windows(15 * SAMPLE_RATE, SAMPLE_RATE, 5.0, 5.0)
-        self.assertEqual([s for s, _ in spans], [0, 5 * SAMPLE_RATE, 10 * SAMPLE_RATE])
+        spans = make_windows(
+            15 * SAMPLE_RATE,
+            SAMPLE_RATE,
+            5.0,
+            5.0
+        )
+
+        self.assertEqual(
+            [s for s, _ in spans],
+            [0, 5 * SAMPLE_RATE, 10 * SAMPLE_RATE]
+        )
 
 
 class SegmentTests(unittest.TestCase):
-    def setUp(self):
-        with open(os.path.join(HERE, "fixture_windows.json")) as f:
-            self.fx = json.load(f)
 
-    def test_merge_matches_hand_worked_fixture(self):
-        got = merge_segments(self.fx["windows"], self.fx["threshold"])
-        self.assertEqual(got, self.fx["segments"])
+    def test_multiple_species_merge_independently(self):
+        windows = [
+            {
+                "start": 0.0,
+                "end": 5.0,
+                "species": "A",
+                "confidence": 0.9
+            },
+            {
+                "start": 0.0,
+                "end": 5.0,
+                "species": "B",
+                "confidence": 0.8
+            },
+            {
+                "start": 2.5,
+                "end": 7.5,
+                "species": "A",
+                "confidence": 0.85
+            }
+        ]
 
-    def test_summary_matches_hand_worked_fixture(self):
-        self.assertEqual(summarize(self.fx["segments"]), self.fx["summary"])
+        result = merge_segments(windows, 0.6)
 
-    def test_nothing_above_threshold(self):
-        self.assertEqual(merge_segments(self.fx["windows"], 0.99), [])
-        self.assertEqual(summarize([]), [])
+        self.assertEqual(len(result), 2)
+
+        by_species = {
+            item["species"]: item
+            for item in result
+        }
+
+        self.assertEqual(by_species["A"]["end"], 7.5)
+        self.assertEqual(by_species["B"]["end"], 5.0)
+
+    def test_below_threshold_is_not_detected(self):
+        windows = [
+            {
+                "start": 0.0,
+                "end": 5.0,
+                "species": "A",
+                "confidence": 0.4
+            }
+        ]
+
+        self.assertEqual(
+            merge_segments(windows, 0.6),
+            []
+        )
+
+    def test_summary(self):
+        segments = [
+            {
+                "species": "A",
+                "start": 0.0,
+                "end": 5.0,
+                "mean_confidence": 0.8,
+                "peak_confidence": 0.9
+            },
+            {
+                "species": "B",
+                "start": 0.0,
+                "end": 5.0,
+                "mean_confidence": 0.7,
+                "peak_confidence": 0.8
+            }
+        ]
+
+        result = summarize(segments)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["species"], "A")
+        self.assertEqual(result[0]["seconds"], 5.0)
 
 
 class WaveformTests(unittest.TestCase):
+
     def test_peaks_are_scaled_and_sized(self):
-        y = np.sin(np.linspace(0, 200, 50_000)).astype(np.float32) * 0.2
+        y = (
+            np.sin(np.linspace(0, 200, 50000))
+            .astype(np.float32) * 0.2
+        )
+
         peaks = waveform_peaks(y, bins=500)
+
         self.assertEqual(len(peaks), 500)
+
         flat = [v for p in peaks for v in p]
-        self.assertAlmostEqual(max(abs(v) for v in flat), 1.0, places=2)
+
+        self.assertAlmostEqual(
+            max(abs(v) for v in flat),
+            1.0,
+            places=2
+        )
 
     def test_tiny_input(self):
-        self.assertEqual(len(waveform_peaks(np.array([0.1, -0.1], dtype=np.float32), bins=1200)), 2)
+        result = waveform_peaks(
+            np.array([0.1, -0.1], dtype=np.float32),
+            bins=1200
+        )
+
+        self.assertEqual(len(result), 2)
 
 
-class ModelImageTests(unittest.TestCase):
-    def test_image_has_the_shape_of_the_training_images(self):
-        """Training PNGs are about 232 x 231 px RGB. This checks the matplotlib
-        layout (3x3 in figure, axes off, tight bbox) gives the same size. The
-        FakeBackend draws with pcolormesh instead of librosa's specshow, so this
-        confirms the layout, not the colours or pixel values."""
-        chunk = np.random.default_rng(1).standard_normal(5 * SAMPLE_RATE).astype(np.float32)
-        img = render_model_image(FakeBackend(), chunk, SAMPLE_RATE)
-        self.assertEqual(img.dtype, np.uint8)
-        self.assertEqual(img.shape[2], 3)
-        self.assertTrue(228 <= img.shape[0] <= 234, img.shape)
-        self.assertTrue(228 <= img.shape[1] <= 235, img.shape)
+class AnalyzerTests(unittest.TestCase):
+
+    def test_analyzer_returns_multiple_species(self):
+        analyzer = Analyzer(
+            FakeBackend(),
+            FakePredictor(),
+            CLASSES
+        )
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".wav",
+            delete=False
+        ) as f:
+            f.write(make_wav_bytes(5))
+            path = f.name
+
+        try:
+            fake_features = np.zeros(
+                (128, 216, 3),
+                dtype=np.float32
+            )
+
+            with patch(
+                "inference.bf.chunk_to_features",
+                return_value=fake_features
+            ):
+                result = analyzer.analyze(
+                    path,
+                    threshold=0.6
+                )
+
+            self.assertEqual(len(result["windows"]), 1)
+
+            scores = result["windows"][0]["probs"]
+
+            self.assertEqual(scores["asbfly"], 0.85)
+            self.assertEqual(scores["ashpri1"], 0.72)
+
+            detected = {
+                s["species"]
+                for s in result["segments"]
+            }
+
+            self.assertIn("asbfly", detected)
+            self.assertIn("ashpri1", detected)
+
+        finally:
+            os.remove(path)
+
+    def test_no_species_above_threshold_means_no_segments(self):
+        class LowScorePredictor:
+            is_stub = True
+
+            def predict(self, features):
+                return np.full(
+                    (len(features), 8),
+                    0.1,
+                    dtype=np.float32
+                )
+
+        analyzer = Analyzer(
+            FakeBackend(),
+            LowScorePredictor(),
+            CLASSES
+        )
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".wav",
+            delete=False
+        ) as f:
+            f.write(make_wav_bytes(5))
+            path = f.name
+
+        try:
+            fake_features = np.zeros(
+                (128, 216, 3),
+                dtype=np.float32
+            )
+
+            with patch(
+                "inference.bf.chunk_to_features",
+                return_value=fake_features
+            ):
+                result = analyzer.analyze(
+                    path,
+                    threshold=0.6
+                )
+
+            self.assertEqual(result["segments"], [])
+            self.assertEqual(result["summary"], [])
+
+        finally:
+            os.remove(path)
 
 
 if __name__ == "__main__":

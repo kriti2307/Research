@@ -219,6 +219,8 @@ td { padding: 7px 12px 7px 0; border-top: 1px solid var(--line); }
 tr.dim td { color: var(--slate); }
 .bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--wave); vertical-align: middle; margin-right: 8px; }
 tr.dim .bar { background: rgba(255, 255, 255, 0.25); }
+.multi { display: flex; align-items: center; gap: 6px; min-height: 22px; }
+.multi + .multi { margin-top: 2px; }
 
 .limits { margin: 32px 0 0; max-width: 68ch; color: var(--slate); font-size: 0.93rem; }
 

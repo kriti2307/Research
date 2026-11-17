@@ -1,0 +1,22 @@
+{
+  "classes": [
+    "asbfly",
+    "ashpri1",
+    "barfly1",
+    "barswa",
+    "bcnher",
+    "bkcbul1",
+    "bkwsti",
+    "brnhao1"
+  ],
+  "display_names": {
+    "asbfly": "Asian Brown Flycatcher",
+    "ashpri1": "Ashy Prinia",
+    "barfly1": "Black-and-orange Flycatcher",
+    "barswa": "Barn Swallow",
+    "bcnher": "Black-crowned Night-Heron",
+    "bkcbul1": "Flame-throated Bulbul",
+    "bkwsti": "Black-winged Stilt",
+    "brnhao1": "Brown Boobook"
+  }
+}

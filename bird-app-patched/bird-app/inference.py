@@ -1,677 +1,507 @@
 
-"""Audio analysis and bird species prediction for the web app."""
-
-from __future__ import annotations
-
-import base64
 import io
 import json
+import math
 import os
-import threading
-from typing import Protocol
+from collections import defaultdict
 
 import numpy as np
-from matplotlib.figure import Figure
-from PIL import Image
+import librosa
+import librosa.display
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
+
+import birdfeatures as bf
 
 
-SAMPLE_RATE = 22050
-WINDOW_SEC = 5.0
-MODEL_IMG_SIZE = (128, 128)
+SAMPLE_RATE = bf.SR
+WINDOW_SEC = bf.WINDOW_SEC
 MAX_SECONDS = 120
 
 
 class AudioError(Exception):
-    """The uploaded audio cannot be analysed."""
-
-
-# --------------------------------------------------
-# AUDIO BACKEND
-# --------------------------------------------------
-
-class AudioBackend(Protocol):
-    def load(self, path: str, max_seconds: float):
-        ...
-
-    def mel_db(self, y: np.ndarray, sr: int):
-        ...
-
-    def draw(self, ax, s_db: np.ndarray, sr: int):
-        ...
+    pass
 
 
 class LibrosaBackend:
 
-    def load(self, path, max_seconds):
-        import librosa
+    def load(self, path, max_seconds=MAX_SECONDS):
+        try:
+            y, sr = librosa.load(
+                path,
+                sr=SAMPLE_RATE,
+                mono=True,
+                duration=max_seconds + 1
+            )
+        except Exception as exc:
+            raise AudioError(f"Could not load audio: {exc}")
 
-        y, sr = librosa.load(
-            path,
-            sr=SAMPLE_RATE,
-            mono=True,
-            duration=max_seconds + 1
-        )
-
-        if len(y) == 0:
-            raise AudioError("The file contains no audio.")
+        if y is None or len(y) == 0:
+            raise AudioError("The audio file is empty.")
 
         if len(y) / sr > max_seconds:
             raise AudioError(
-                f"Recording exceeds {int(max_seconds)} seconds."
+                f"Audio exceeds the {max_seconds}-second limit."
             )
 
-        return y, sr
+        return y.astype(np.float32), sr
 
     def mel_db(self, y, sr):
-        import librosa
-
-        s = librosa.feature.melspectrogram(
+        mel = librosa.feature.melspectrogram(
             y=y,
-            sr=sr
+            sr=sr,
+            n_mels=128,
+            fmax=sr // 2
         )
 
-        return librosa.power_to_db(s, ref=np.max)
+        return librosa.power_to_db(
+            mel,
+            ref=np.max
+        )
 
-    def draw(self, ax, s_db, sr):
-        import librosa.display
+    def draw(self, mel_db, sr):
+        fig, ax = plt.subplots(figsize=(10, 3))
 
         librosa.display.specshow(
-            s_db,
+            mel_db,
             sr=sr,
+            x_axis="time",
+            y_axis="mel",
             ax=ax
         )
 
+        ax.set_title("Audio spectrogram")
+        fig.tight_layout()
 
-# --------------------------------------------------
-# MODEL PREDICTOR
-# --------------------------------------------------
+        buffer = io.BytesIO()
+
+        fig.savefig(
+            buffer,
+            format="png",
+            dpi=120
+        )
+
+        plt.close(fig)
+        buffer.seek(0)
+
+        return buffer.getvalue()
+
 
 class KerasPredictor:
 
-    is_stub = False
+    def __init__(self, model_path, classes):
+        try:
+            from tensorflow.keras.models import load_model
 
-    def __init__(self, model_path: str, classes: list[str]):
-        import tensorflow as tf
+            self.model = load_model(
+                model_path,
+                compile=False
+            )
+        except Exception as exc:
+            raise AudioError(f"Could not load model: {exc}")
 
-        self._tf = tf
+        self.classes = classes
 
-        self.model = tf.keras.models.load_model(
-            model_path,
-            compile=False
-        )
+        input_shape = self.model.input_shape
+        output_shape = self.model.output_shape
 
-        n_out = self.model.output_shape[-1]
+        if isinstance(input_shape, list):
+            raise AudioError("Model has multiple inputs.")
 
-        if n_out != len(classes):
-            raise ValueError(
-                f"Model has {n_out} outputs but "
-                f"classes.json contains {len(classes)} classes."
+        if isinstance(output_shape, list):
+            raise AudioError("Model has multiple outputs.")
+
+        if tuple(input_shape[1:]) != bf.INPUT_SHAPE:
+            raise AudioError(
+                f"Expected model input {bf.INPUT_SHAPE}, "
+                f"got {input_shape[1:]}."
             )
 
-    def predict(self, images: list[np.ndarray]) -> np.ndarray:
+        if output_shape[-1] != len(classes):
+            raise AudioError(
+                f"Model outputs {output_shape[-1]} classes, "
+                f"but classes.json contains {len(classes)}."
+            )
 
-        batch = np.stack([
-            self._tf.image.resize(
-                im.astype("float32"),
-                MODEL_IMG_SIZE,
-                method="bilinear"
-            ).numpy()
-            for im in images
-        ])
-
-        return self.model.predict(
-            batch / 255.0,
-            verbose=0
+    def predict(self, features):
+        return np.asarray(
+            self.model.predict(features, verbose=0)
         )
 
-
-# --------------------------------------------------
-# AUDIO WINDOWING
-# --------------------------------------------------
 
 def make_windows(
-    n_samples: int,
-    sr: int,
-    window_sec: float,
-    hop_sec: float
+    n_samples,
+    sr=SAMPLE_RATE,
+    window_sec=WINDOW_SEC,
+    hop_sec=None
 ):
+    if hop_sec is None:
+        hop_sec = window_sec
 
-    win = int(round(window_sec * sr))
-    hop = int(round(hop_sec * sr))
+    if n_samples <= 0:
+        return []
 
-    if n_samples <= win:
-        return [(0, win)]
+    window_samples = int(round(window_sec * sr))
+    hop_samples = int(round(hop_sec * sr))
 
-    starts = list(range(0, n_samples - win + 1, hop))
+    if window_samples <= 0 or hop_samples <= 0:
+        raise ValueError("Window and hop lengths must be positive.")
 
-    if starts[-1] + win < n_samples - int(0.5 * sr):
-        starts.append(n_samples - win)
+    if n_samples <= window_samples:
+        return [(0, window_samples)]
 
-    return [(s, s + win) for s in starts]
+    spans = []
+    start = 0
 
+    while start + window_samples < n_samples:
+        spans.append(
+            (start, start + window_samples)
+        )
+        start += hop_samples
 
-# --------------------------------------------------
-# SPECTROGRAM GENERATION
-# --------------------------------------------------
+    last_start = n_samples - window_samples
 
-def render_model_image(
-    backend: AudioBackend,
-    chunk: np.ndarray,
-    sr: int
-):
+    if not spans or spans[-1][0] < last_start:
+        spans.append(
+            (last_start, n_samples)
+        )
 
-    fig = Figure(figsize=(3, 3))
-    ax = fig.add_subplot(111)
-
-    backend.draw(
-        ax,
-        backend.mel_db(chunk, sr),
-        sr
-    )
-
-    ax.axis("off")
-
-    buf = io.BytesIO()
-
-    fig.savefig(
-        buf,
-        format="png",
-        bbox_inches="tight",
-        pad_inches=0
-    )
-
-    buf.seek(0)
-
-    with Image.open(buf) as im:
-        return np.asarray(im.convert("RGB"))
+    return list(dict.fromkeys(spans))
 
 
-def render_display_spectrogram(
-    backend: AudioBackend,
-    y: np.ndarray,
-    sr: int
-):
+def merge_segments(windows, threshold):
+    grouped = defaultdict(list)
 
-    width, height = 1600, 320
-
-    fig = Figure(
-        figsize=(width / 100, height / 100),
-        dpi=100
-    )
-
-    ax = fig.add_axes([0, 0, 1, 1])
-
-    backend.draw(
-        ax,
-        backend.mel_db(y, sr),
-        sr
-    )
-
-    ax.set_aspect("auto")
-    ax.axis("off")
-
-    buf = io.BytesIO()
-
-    fig.savefig(
-        buf,
-        format="png",
-        dpi=100
-    )
-
-    return base64.b64encode(
-        buf.getvalue()
-    ).decode("ascii")
-
-
-# --------------------------------------------------
-# WAVEFORM
-# --------------------------------------------------
-
-def waveform_peaks(y: np.ndarray, bins: int = 1200):
-
-    n = len(y)
-    bins = max(1, min(bins, n))
-
-    edges = np.linspace(
-        0,
-        n,
-        bins + 1
-    ).astype(int)[:-1]
-
-    mins = np.minimum.reduceat(y, edges)
-    maxs = np.maximum.reduceat(y, edges)
-
-    peak = max(
-        float(np.max(np.abs(y))),
-        1e-9
-    )
-
-    return [
-        [
-            round(float(a) / peak, 3),
-            round(float(b) / peak, 3)
-        ]
-        for a, b in zip(mins, maxs)
-    ]
-
-
-# --------------------------------------------------
-# MERGE PREDICTIONS INTO SEGMENTS
-# --------------------------------------------------
-
-def merge_segments(
-    windows: list[dict],
-    threshold: float
-):
+    # Group by species so detections merge independently.
+    for window in windows:
+        if window["confidence"] >= threshold:
+            grouped[window["species"]].append(window)
 
     segments = []
-    current = None
 
-    for w in windows:
+    for species, species_windows in grouped.items():
+        species_windows.sort(
+            key=lambda item: item["start"]
+        )
 
-        if w["confidence"] < threshold:
-            current = None
-            continue
+        current = None
 
-        if (
-            current
-            and current["species"] == w["species"]
-            and w["start"] <= current["end"] + 0.011
-        ):
+        for window in species_windows:
+            if (
+                current is not None
+                and window["start"] <= current["end"] + 0.011
+            ):
+                current["end"] = max(
+                    current["end"],
+                    window["end"]
+                )
 
-            current["end"] = max(
-                current["end"],
-                w["end"]
-            )
+                current["_confs"].append(
+                    window["confidence"]
+                )
 
-            current["_confs"].append(
-                w["confidence"]
-            )
+            else:
+                if current is not None:
+                    segments.append(current)
 
-        else:
+                current = {
+                    "species": species,
+                    "start": window["start"],
+                    "end": window["end"],
+                    "_confs": [window["confidence"]]
+                }
 
-            current = {
-                "species": w["species"],
-                "start": w["start"],
-                "end": w["end"],
-                "_confs": [w["confidence"]]
-            }
-
+        if current is not None:
             segments.append(current)
 
-    return [
-        {
-            "species": s["species"],
-            "start": round(s["start"], 2),
-            "end": round(s["end"], 2),
-            "mean_confidence": round(
-                sum(s["_confs"]) / len(s["_confs"]),
-                4
-            ),
-            "peak_confidence": round(
-                max(s["_confs"]),
-                4
-            )
-        }
-        for s in segments
-    ]
-
-
-# --------------------------------------------------
-# SUMMARY
-# --------------------------------------------------
-
-def _union_seconds(intervals):
-
-    total = 0.0
-    current_end = None
-    current_start = None
-
-    for a, b in sorted(intervals):
-
-        if current_end is None or a > current_end:
-
-            if current_end is not None:
-                total += current_end - current_start
-
-            current_start = a
-            current_end = b
-
-        else:
-            current_end = max(current_end, b)
-
-    if current_end is not None:
-        total += current_end - current_start
-
-    return total
-
-
-def summarize(segments: list[dict]):
-
-    by_species = {}
+    result = []
 
     for segment in segments:
+        confidence_values = segment["_confs"]
 
-        by_species.setdefault(
-            segment["species"],
-            []
-        ).append(segment)
-
-    rows = []
-
-    for species, species_segments in by_species.items():
-
-        rows.append({
-            "species": species,
-            "segments": len(species_segments),
-
-            "seconds": round(
-                _union_seconds([
-                    (s["start"], s["end"])
-                    for s in species_segments
-                ]),
-                2
+        result.append({
+            "species": segment["species"],
+            "start": round(segment["start"], 2),
+            "end": round(segment["end"], 2),
+            "mean_confidence": round(
+                float(np.mean(confidence_values)), 4
             ),
-
-            "peak_confidence": max(
-                s["peak_confidence"]
-                for s in species_segments
+            "peak_confidence": round(
+                float(max(confidence_values)), 4
             )
         })
 
     return sorted(
-        rows,
-        key=lambda r: -r["seconds"]
+        result,
+        key=lambda item: item["start"]
     )
 
 
-# --------------------------------------------------
-# MAIN ANALYZER
-# --------------------------------------------------
+def summarize(segments):
+    grouped = defaultdict(list)
+
+    for segment in segments:
+        grouped[segment["species"]].append(segment)
+
+    summary = []
+
+    for species, items in grouped.items():
+        intervals = sorted(
+            (item["start"], item["end"])
+            for item in items
+        )
+
+        total = 0.0
+
+        if intervals:
+            start, end = intervals[0]
+
+            for next_start, next_end in intervals[1:]:
+                if next_start <= end:
+                    end = max(end, next_end)
+                else:
+                    total += end - start
+                    start, end = next_start, next_end
+
+            total += end - start
+
+        summary.append({
+            "species": species,
+            "detections": len(items),
+            "seconds": round(total, 2),
+            "total_seconds": round(total, 2),
+            "mean_confidence": round(
+                float(np.mean([
+                    item["mean_confidence"]
+                    for item in items
+                ])), 4
+            ),
+            "peak_confidence": round(
+                max(
+                    item.get(
+                        "peak_confidence",
+                        item["mean_confidence"]
+                    )
+                    for item in items
+                ), 4
+            )
+        })
+
+    return sorted(
+        summary,
+        key=lambda item: item["seconds"],
+        reverse=True
+    )
+
+
+def waveform_peaks(y, bins=1000):
+    y = np.asarray(y, dtype=np.float32)
+
+    if len(y) == 0:
+        return []
+
+    peak = float(np.max(np.abs(y)))
+
+    if peak > 0:
+        y = y / peak
+
+    bins = max(1, int(bins))
+    chunk_size = max(1, math.ceil(len(y) / bins))
+
+    result = []
+
+    for start in range(0, len(y), chunk_size):
+        chunk = y[start:start + chunk_size]
+
+        if len(chunk) == 0:
+            continue
+
+        result.append([
+            round(float(np.min(chunk)), 4),
+            round(float(np.max(chunk)), 4)
+        ])
+
+    return result
+
+
+def render_display_spectrogram(backend, y, sr):
+    try:
+        mel = backend.mel_db(y, sr)
+        return backend.draw(mel, sr)
+    except Exception:
+        return None
+
 
 class Analyzer:
 
-    def __init__(
-        self,
-        backend: AudioBackend,
-        predictor,
-        classes: list[str],
-        display_names: dict[str, str] | None = None
-    ):
-
+    def __init__(self, backend, predictor, classes):
         self.backend = backend
         self.predictor = predictor
-        self.classes = list(classes)
-
-        self.labels = {
-            c: (display_names or {}).get(c) or c
-            for c in self.classes
-        }
-
-        self._lock = threading.Lock()
-
-    @property
-    def is_demo(self):
-        return bool(
-            getattr(self.predictor, "is_stub", False)
-        )
+        self.classes = classes
 
     def analyze(
         self,
-        path: str,
-        hop_sec: float = 2.5,
-        threshold: float = 0.25,
-        max_seconds: float = MAX_SECONDS
-    ) -> dict:
+        path,
+        hop_sec=None,
+        threshold=0.6,
+        max_seconds=MAX_SECONDS
+    ):
+        y, sr = self.backend.load(path, max_seconds)
 
-        # Load audio
-        try:
+        y = np.asarray(y, dtype=np.float32)
 
-            y, sr = self.backend.load(
-                path,
-                max_seconds
+        if len(y) == 0:
+            raise AudioError("The audio file is empty.")
+
+        duration = len(y) / sr
+
+        if duration > max_seconds:
+            raise AudioError(
+                f"Audio exceeds the {max_seconds}-second limit."
             )
 
-        except AudioError:
-            raise
+        y = bf.normalize_recording(y)
+        duration = len(y) / sr
 
-        except Exception as exc:
-
-            raise AudioError(
-                "Could not read this audio file. "
-                "Try WAV, MP3, OGG or FLAC."
-            ) from exc
-
-        n = len(y)
-
-        # Create overlapping windows
         spans = make_windows(
-            n,
+            len(y),
             sr,
             WINDOW_SEC,
             hop_sec
         )
 
-        win = int(round(WINDOW_SEC * sr))
+        features = []
 
-        images = []
+        for start_sample, end_sample in spans:
+            chunk = y[start_sample:min(end_sample, len(y))]
 
-        for s, e in spans:
-
-            chunk = y[s:e]
-
-            if len(chunk) < win:
-
+            if len(chunk) < int(WINDOW_SEC * sr):
                 chunk = np.pad(
                     chunk,
-                    (0, win - len(chunk))
+                    (0, int(WINDOW_SEC * sr) - len(chunk))
                 )
 
-            images.append(
-                render_model_image(
-                    self.backend,
-                    chunk,
-                    sr
+            features.append(
+                bf.chunk_to_features(chunk)
+            )
+
+        if features:
+            batch = np.stack(features, axis=0)
+            predictions = self.predictor.predict(batch)
+        else:
+            predictions = np.empty(
+                (0, len(self.classes))
+            )
+
+        predictions = np.asarray(predictions)
+
+        if predictions.shape != (
+            len(spans),
+            len(self.classes)
+        ):
+            raise AudioError(
+                "Prediction output does not match the "
+                "number of windows and classes."
+            )
+
+        window_results = []
+        detected_windows = defaultdict(list)
+
+        for index, (start_sample, end_sample) in enumerate(spans):
+            start = start_sample / sr
+            end = min(end_sample, len(y)) / sr
+
+            probs = {
+                species: round(
+                    float(predictions[index, class_index]), 4
                 )
-            )
+                for class_index, species in enumerate(self.classes)
+            }
 
-        # Run model
-        with self._lock:
-
-            probs = np.asarray(
-                self.predictor.predict(images)
-            )
-
-        if probs.ndim != 2 or probs.shape[1] != len(self.classes):
-            raise ValueError(
-                "Model prediction shape does not match the class list."
-            )
-
-        # Multiple candidate predictions per window
-        windows = []
-
-        per_species_windows = {
-            c: [] for c in self.classes
-        }
-
-        for (s, e), p in zip(spans, probs):
-
-            detected = [
-                i
-                for i, score in enumerate(p)
-                if float(score) >= threshold
-            ]
-
-            # Keep only candidates that meet the selected threshold.
-            # The legacy best-guess fields below remain for compatibility,
-            # but must not be treated as confirmed detections.
-            detections = []
-
-            for k in detected:
-
-                confidence = float(p[k])
-                species = self.classes[k]
-
-                detections.append({
-                    "species": species,
-                    "confidence": round(
-                        confidence,
-                        4
-                    )
-                })
-
-                per_species_windows[species].append({
-
-                    "start": round(s / sr, 2),
-
-                    "end": round(
-                        min(e, n) / sr,
-                        2
-                    ),
-
-                    "species": species,
-
-                    "confidence": confidence
-                })
-
-            best = int(np.argmax(p))
-
-            windows.append({
-
-                "start": round(s / sr, 2),
-
-                "end": round(
-                    min(e, n) / sr,
-                    2
-                ),
-
-                "species": self.classes[best],
-
-                "confidence": round(
-                    float(p[best]),
-                    4
-                ),
-
-                "detections": detections,
-
-                "probs": {
-                    c: round(float(v), 4)
-                    for c, v in zip(
-                        self.classes,
-                        p
-                    )
-                }
+            window_results.append({
+                "start": round(start, 2),
+                "end": round(end, 2),
+                "probs": probs
             })
 
-        # Create separate segments for each species
+            # Independent sigmoid scores: multiple species
+            # can be detected in the same audio window.
+            for species, confidence in probs.items():
+                if confidence >= threshold:
+                    detected_windows[species].append({
+                        "species": species,
+                        "start": start,
+                        "end": end,
+                        "confidence": confidence
+                    })
+
         segments = []
 
-        for species_windows in per_species_windows.values():
-
+        for species_windows in detected_windows.values():
             segments.extend(
-                merge_segments(
-                    species_windows,
-                    threshold
-                )
+                merge_segments(species_windows, threshold)
             )
 
         segments.sort(
-            key=lambda x: x["start"]
+            key=lambda item: item["start"]
         )
 
-        # Final response
+        summary = summarize(segments)
+
+        spectrogram_png = render_display_spectrogram(
+            self.backend,
+            y,
+            sr
+        )
+
         return {
-
-            "demo": self.is_demo,
-
-            "duration": round(n / sr, 2),
-
+            "duration": round(duration, 2),
             "sample_rate": sr,
-
-            "window_sec": WINDOW_SEC,
-
-            "hop_sec": hop_sec,
-
-            "threshold": threshold,
-
             "classes": self.classes,
-
-            "labels": self.labels,
-
-            "windows": windows,
-
+            "windows": window_results,
             "segments": segments,
-
-            "summary": summarize(segments),
-
+            "summary": summary,
             "waveform": waveform_peaks(y),
-
-            "spectrogram_png": render_display_spectrogram(
-                self.backend,
-                y,
-                sr
-            )
+            "spectrogram_png": spectrogram_png
         }
 
 
-# --------------------------------------------------
-# LOAD MODEL AND BUILD ANALYZER
-# --------------------------------------------------
-
-def build_default_analyzer(
-    model_path: str | None = None,
-    classes_path: str | None = None
-) -> Analyzer:
-
-    here = os.path.dirname(
-        os.path.abspath(__file__)
-    )
-
-    model_path = (
-        model_path
-        or os.environ.get("MODEL_PATH")
-        or os.path.join(
-            here,
-            "model",
-            "bird_model.h5"
-        )
-    )
-
-    classes_path = (
-        classes_path
-        or os.environ.get("CLASSES_PATH")
-        or os.path.join(
-            here,
-            "model",
-            "classes.json"
-        )
-    )
-
-    if not os.path.exists(model_path):
-
-        raise RuntimeError(
-            f"Model file not found at {model_path}"
+def build_default_analyzer(model_dir=None):
+    if model_dir is None:
+        model_dir = os.path.join(
+            os.path.dirname(__file__),
+            "model"
         )
 
-    with open(
-        classes_path,
-        encoding="utf-8"
-    ) as f:
+    model_path = os.path.join(
+        model_dir,
+        "bird_model.h5"
+    )
 
-        cfg = json.load(f)
+    classes_path = os.path.join(
+        model_dir,
+        "classes.json"
+    )
 
-    classes = cfg["classes"]
+    with open(classes_path, "r", encoding="utf-8") as file:
+        classes_data = json.load(file)
+
+    # Support both list-based and dictionary-based classes.json.
+    if isinstance(classes_data, dict):
+        classes = classes_data["classes"]
+    else:
+        classes = classes_data
+
+    predictor = KerasPredictor(
+        model_path,
+        classes
+    )
 
     return Analyzer(
-
         LibrosaBackend(),
-
-        KerasPredictor(
-            model_path,
-            classes
-        ),
-
-        classes,
-
-        cfg.get("display_names")
+        predictor,
+        classes
     )

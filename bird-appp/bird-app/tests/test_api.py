@@ -7,6 +7,7 @@ from inference import Analyzer
 from tests.fakes import FakeBackend, StubPredictor, make_wav_bytes
 
 CLASSES = ["Barfly", "asbfly", "ashpri", "bkcbul"]
+THRESHOLD = 0.5
 
 
 def make_client(plan=None):
@@ -56,11 +57,32 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(d["filename"], "clip.wav")
 
     def test_scripted_predictions_become_the_expected_segments(self):
-        # plan per window: Barfly .9, Barfly .8, asbfly .7, ashpri .4 (uncertain)
+        # 12 s clip -> windows 0-5, 2.5-7.5, 5-10, 7-12 (end-anchored); plan per window:
+        #   0: Barfly .9        1: Barfly .8 AND asbfly .7        2: asbfly .75        3: nothing
         d = upload(self.client).get_json()
         got = [(s["species"], s["start"], s["end"]) for s in d["segments"]]
-        self.assertEqual(got, [("Barfly", 0.0, 7.5), ("asbfly", 5.0, 10.0)])
+        self.assertEqual(got, [("Barfly", 0.0, 7.5), ("asbfly", 2.5, 10.0)])
         self.assertEqual([row["species"] for row in d["summary"]], ["Barfly", "asbfly"])
+
+    def test_two_birds_in_the_same_window_are_both_reported(self):
+        d = upload(self.client).get_json()
+        found = [x["species"] for x in d["windows"][1]["detections"]]
+        self.assertEqual(found, ["Barfly", "asbfly"])
+
+    def test_a_window_can_report_no_bird(self):
+        d = upload(self.client).get_json()
+        self.assertEqual(d["windows"][3]["detections"], [])
+
+    def test_default_threshold_is_the_one_the_model_was_evaluated_at(self):
+        d = upload(self.client).get_json()
+        self.assertEqual(d["threshold"], THRESHOLD)
+
+    def test_nothing_is_reported_when_nothing_is_confident(self):
+        _, client = make_client(plan=[[]])
+        d = upload(client).get_json()
+        self.assertEqual(d["segments"], [])
+        self.assertEqual(d["summary"], [])
+        self.assertTrue(all(w["detections"] == [] for w in d["windows"]))
 
     def test_threshold_parameter_changes_segments(self):
         d = upload(self.client, threshold=0.95).get_json()
@@ -102,7 +124,7 @@ class ApiTests(unittest.TestCase):
         class Boom:
             is_stub = True
 
-            def predict(self, images):
+            def predict(self, features):
                 raise RuntimeError("secret internal detail")
 
         analyzer = Analyzer(FakeBackend(), Boom(), CLASSES)

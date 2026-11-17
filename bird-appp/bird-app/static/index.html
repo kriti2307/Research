@@ -15,7 +15,7 @@
     <canvas id="hero-canvas" class="hero-canvas" aria-hidden="true"></canvas>
     <div class="page hero-inner">
       <h1>Bird call<br>detector</h1>
-      <p class="lead">Upload a field recording. The model listens in 5-second windows and marks where it hears each species.</p>
+      <p class="lead">Upload a field recording. The model listens in 5-second windows and marks where it hears each species, including several at once. If it hears none of the species it knows, it says so.</p>
     </div>
   </header>
 
@@ -45,8 +45,8 @@
 
         <div class="controls">
           <label for="threshold">Confidence threshold</label>
-          <input type="range" id="threshold" min="0.3" max="0.95" step="0.05" value="0.6">
-          <output id="threshold-out" for="threshold">60%</output>
+          <input type="range" id="threshold" min="0.3" max="0.95" step="0.05" value="0.5">
+          <output id="threshold-out" for="threshold">50%</output>
         </div>
 
         <div class="stack" id="stack" aria-label="Waveform, spectrogram and detections on a shared time axis">

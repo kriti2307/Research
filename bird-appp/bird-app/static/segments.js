@@ -1,7 +1,11 @@
 // Merges per-window predictions into detection segments.
-// Mirrors merge_segments() and summarize() in inference.py; both are checked
-// against tests/fixture_windows.json. The page uses this to re-draw detections
-// instantly when the confidence threshold slider moves, without another upload.
+// Mirrors merge_segments(), window_detections(), segments_from_probs() and summarize()
+// in inference.py; all are checked against tests/fixture_windows.json and
+// tests/fixture_multilabel.json. The page uses this to re-draw detections instantly
+// when the confidence threshold slider moves, without another upload.
+//
+// The model is multi-label: each window carries one probability PER species, and every
+// species is judged on its own, so a window can hold several species or none.
 (function (root) {
   function round(v, digits) {
     const f = Math.pow(10, digits);
@@ -63,7 +67,28 @@
     return rows.sort((a, b) => b.seconds - a.seconds);
   }
 
-  const api = { mergeSegments, summarize };
+  // Species whose own probability reaches the threshold in one window, strongest first.
+  // Empty array = nothing detected. There is no "best guess" fallback.
+  function detectionsAt(win, classes, threshold) {
+    return classes
+      .filter((c) => win.probs[c] >= threshold)
+      .map((c) => ({ species: c, confidence: win.probs[c] }))
+      .sort((a, b) => b.confidence - a.confidence);
+  }
+
+  // Merge each species separately, so segments of different species can overlap in time.
+  function segmentsFromProbs(windows, classes, threshold) {
+    const segs = [];
+    for (const c of classes) {
+      const perSpecies = windows.map((w) => ({
+        species: c, start: w.start, end: w.end, confidence: w.probs[c],
+      }));
+      for (const s of mergeSegments(perSpecies, threshold)) segs.push(s);
+    }
+    return segs.sort((a, b) => a.start - b.start || (a.species < b.species ? -1 : a.species > b.species ? 1 : 0));
+  }
+
+  const api = { mergeSegments, summarize, detectionsAt, segmentsFromProbs };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.BirdSegments = api;
 })(typeof self !== 'undefined' ? self : this);
